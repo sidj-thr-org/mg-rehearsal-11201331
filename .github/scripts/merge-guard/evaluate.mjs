@@ -136,15 +136,17 @@ async function findPr(gh, env, event) {
   return { pr }
 }
 
-const MEMBERS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
-
-// A member's `/merge-guard accept <sha>` naming the PR head, so a later push needs a new one.
+// A `/merge-guard accept <sha>` naming the PR head, from someone with write access. author_association can't decide
+// it: a private org member reads as CONTRIBUTOR to this token.
 async function acceptedBy(gh, env, pr) {
-  const comments = await gh.all(`repos/${env.GITHUB_REPOSITORY}/issues/${pr.number}/comments`)
-  return comments.some((c) => {
+  const repo = env.GITHUB_REPOSITORY
+  for (const c of await gh.all(`repos/${repo}/issues/${pr.number}/comments`)) {
     const sha = /^\/merge-guard accept ([0-9a-f]{7,40})\b/.exec(c.body?.trim() ?? '')?.[1]
-    return MEMBERS.has(c.author_association) && sha && pr.head.sha.startsWith(sha)
-  })
+    if (!sha || !pr.head.sha.startsWith(sha)) continue
+    const { permission } = await gh.get(`repos/${repo}/collaborators/${encodeURIComponent(c.user.login)}/permission`)
+    if (['admin', 'write'].includes(permission)) return true
+  }
+  return false
 }
 
 // pull_request runs by head SHA; workflow_run runs by the head SHA in their run-name.
