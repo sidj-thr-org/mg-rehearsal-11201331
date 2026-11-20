@@ -39,3 +39,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo "error codes ok"
+
+  disallowed-deps:
+    if: github.event.action != 'labeled'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "deps ok"
