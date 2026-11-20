@@ -1,0 +1,63 @@
+name: Merge Guard
+
+# Posts qvac-merge-guard / validate-pr from .github/merge-rules.yml. See docs/ci/MERGE-GUARD.md.
+on:
+  workflow_run:
+    workflows: [PR checks, SDK checks]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to evaluate
+        type: string
+        required: true
+      sha:
+        description: The PR head the caller ran for; groups evaluations of one commit
+        type: string
+        default: ""
+  # /merge-guard from a member re-runs it.
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+cache-mode: none
+
+concurrency:
+  group: pr-gate-merge-${{ inputs.sha || github.event.workflow_run.head_sha || inputs.pr || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate-pr:
+    if: >-
+      github.event_name != 'issue_comment' || (
+        github.event.issue.pull_request != null &&
+        startsWith(github.event.comment.body, '/merge-guard') &&
+        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Checkout the rules and the evaluator (default branch)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: |
+            .github/merge-rules.yml
+            .github/scripts/merge-guard
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Evaluate the rules
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RULES_JSON: ${{ runner.temp }}/merge-rules.json
+        run: |
+          yq -o=json '.' .github/merge-rules.yml > "$RULES_JSON"
+          node .github/scripts/merge-guard/evaluate.mjs

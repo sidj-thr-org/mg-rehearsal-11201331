@@ -1,0 +1,41 @@
+name: Select (stub)
+
+on:
+  workflow_call:
+    inputs:
+      group:
+        type: string
+        required: true
+      pr:
+        type: string
+        default: ""
+    outputs:
+      projects:
+        value: ${{ jobs.select.outputs.projects }}
+      any:
+        value: ${{ jobs.select.outputs.any }}
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      projects: ${{ steps.s.outputs.projects }}
+      any: ${{ steps.s.outputs.any }}
+    steps:
+      - id: s
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr || github.event.pull_request.number }}
+          GROUP: ${{ inputs.group }}
+        run: |
+          sdk=" ai-sdk-provider cli error inference logging rag sdk sdk-e2e sdk-kotlin sdk-python test-suite "
+          sel=()
+          for d in $(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename' | sed -n 's#^packages/\([^/]*\)/.*#\1#p' | sort -u); do
+            if [[ "$sdk" == *" $d "* ]]; then [ "$GROUP" = sdk ] && sel+=("$d"); else [ "$GROUP" = addons ] && sel+=("$d"); fi
+          done
+          json=$(printf '%s\n' "${sel[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')
+          echo "projects=$json" >> "$GITHUB_OUTPUT"
+          [ "$json" = "[]" ] && echo "any=false" >> "$GITHUB_OUTPUT" || echo "any=true" >> "$GITHUB_OUTPUT"

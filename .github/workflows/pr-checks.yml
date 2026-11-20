@@ -1,0 +1,41 @@
+name: PR checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  select:
+    if: github.event.action != 'labeled'
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/_select-stub.yml
+    with:
+      group: addons
+
+  checks:
+    needs: select
+    if: needs.select.outputs.any == 'true'
+    name: checks (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJSON(needs.select.outputs.projects) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
+        with:
+          persist-credentials: false
+      - name: lint
+        run: if grep -qx checks stub/fail 2>/dev/null; then echo "::error::stub lint failure"; exit 1; fi
+
+  error-code-ranges:
+    if: github.event.action != 'labeled'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "error codes ok"

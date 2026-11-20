@@ -1,0 +1,103 @@
+name: PR build and test
+run-name: PR build and test ${{ github.event.workflow_run.head_sha || github.ref_name }}
+
+on:
+  workflow_run:
+    workflows: [PR checks]
+    types: [requested]
+
+permissions: {}
+
+jobs:
+  context:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      pr: ${{ steps.pr.outputs.pr }}
+      sha: ${{ steps.pr.outputs.sha }}
+      repository: ${{ steps.pr.outputs.repository }}
+      ok: ${{ steps.pr.outputs.ok }}
+      refused: ""
+    steps:
+      - id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          pr=$(gh api "repos/$REPO/pulls?state=open&per_page=100&head=${HEAD_REPO%%/*}:$BRANCH" \
+            --jq "[.[] | select(.head.sha == \"$SHA\" and .base.ref == \"main\")][0].number // empty")
+          [ -n "$pr" ] || { echo "No open PR into main at $SHA"; exit 0; }
+          echo "PR #$pr at $SHA"
+          { echo "pr=$pr"; echo "sha=$SHA"; echo "repository=$HEAD_REPO"; echo "ok=true"; } >> "$GITHUB_OUTPUT"
+
+  select:
+    needs: context
+    if: needs.context.outputs.pr != ''
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/_select-stub.yml
+    with:
+      group: addons
+      pr: ${{ needs.context.outputs.pr }}
+
+  status:
+    needs: [context, select]
+    if: always() && !cancelled() && needs.select.outputs.any == 'true'
+    name: status ${{ matrix.project }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJSON(needs.select.outputs.projects) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      HEAD_REPO: ${{ needs.context.outputs.repository }}
+      SHA: ${{ needs.context.outputs.sha }}
+      KEY: ${{ matrix.project }}
+    steps:
+      - name: prebuild
+        run: |
+          fail=$(gh api "repos/$HEAD_REPO/contents/stub/fail?ref=$SHA" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+          state=success; grep -qx build <<< "$fail" && state=failure
+          gh api -X POST "repos/$REPO/statuses/$SHA" -f state=$state -f context="qvac/prebuild-$KEY" -f description="prebuild $state" > /dev/null
+          [ "$state" = success ] || { echo "::error::prebuild failed"; exit 1; }
+      - name: cpp-tests
+        if: "!cancelled()"
+        run: gh api -X POST "repos/$REPO/statuses/$SHA" -f state=success -f context="qvac/cpp-tests-$KEY" -f description="cpp-tests success" > /dev/null
+
+  selected:
+    needs: [context, select]
+    if: always() && !cancelled() && needs.context.outputs.pr != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          OK: ${{ needs.context.outputs.ok }}
+          REFUSED: ${{ needs.context.outputs.refused }}
+          SELECT: ${{ needs.select.result }}
+        run: |
+          if [ "$OK" != true ]; then echo "::error::${REFUSED:-Not built: the PR head moved}"; exit 1; fi
+          if [ "$SELECT" != success ]; then echo "::error::Package selection: $SELECT"; exit 1; fi
+
+  merge-guard:
+    needs: [context, selected, status]
+    if: always() && !cancelled() && needs.context.outputs.pr != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ needs.context.outputs.pr }}
+          SHA: ${{ needs.context.outputs.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: gh workflow run pr-gate-merge.yml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH" -f pr="$PR" -f sha="$SHA"

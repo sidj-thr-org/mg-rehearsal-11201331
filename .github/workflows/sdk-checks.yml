@@ -1,0 +1,46 @@
+name: SDK checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  select:
+    if: github.event.action != 'edited'
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/_select-stub.yml
+    with:
+      group: sdk
+
+  pod-rules:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
+        with:
+          persist-credentials: false
+      - run: if grep -qx sdk stub/fail 2>/dev/null; then echo "::error::stub pod-rules failure"; exit 1; fi
+
+  release-guard:
+    needs: select
+    if: needs.select.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "release guard ok"
+
+  checks:
+    needs: select
+    if: needs.select.outputs.any == 'true'
+    name: checks (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJSON(needs.select.outputs.projects) }}
+    steps:
+      - run: echo "sdk checks ok"
