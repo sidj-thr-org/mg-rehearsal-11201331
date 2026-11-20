@@ -24,7 +24,8 @@ permissions: {}
 cache-mode: none
 
 concurrency:
-  group: pr-gate-merge-${{ inputs.sha || github.event.workflow_run.head_sha || inputs.pr || github.event.issue.number }}
+  # Other comments get their own group, so they can't cancel a /merge-guard run.
+  group: pr-gate-merge-${{ inputs.sha || github.event.workflow_run.head_sha || inputs.pr || (startsWith(github.event.comment.body, '/merge-guard') && github.event.issue.number) || github.run_id }}
   cancel-in-progress: true
 
 jobs:
