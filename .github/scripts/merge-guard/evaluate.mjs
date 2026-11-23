@@ -149,16 +149,20 @@ async function acceptedBy(gh, env, pr) {
   return false
 }
 
-// pull_request runs by head SHA; workflow_run runs by the head SHA in their run-name.
+// pull_request runs by head SHA; workflow_run runs, and the PR builds an accept dispatches, by the head SHA in their
+// run-name.
 async function producerRuns(gh, env, file, pr) {
   const repo = env.GITHUB_REPOSITORY
   const path = `.github/workflows/${file}`
+  const named = async (event) =>
+    (await gh.get(`repos/${repo}/actions/workflows/${file}/runs?event=${event}&per_page=100`)).workflow_runs.filter(
+      (r) => r.head_branch === env.DEFAULT_BRANCH && r.display_title.includes(pr.head.sha)
+    )
   const runs = [
     ...(await gh.get(`repos/${repo}/actions/workflows/${file}/runs?event=pull_request&head_sha=${pr.head.sha}&per_page=100`))
       .workflow_runs.filter((r) => r.head_repository?.full_name === pr.head.repo?.full_name),
-    ...(await gh.get(`repos/${repo}/actions/workflows/${file}/runs?event=workflow_run&per_page=100`)).workflow_runs.filter(
-      (r) => r.head_branch === env.DEFAULT_BRANCH && r.display_title.includes(pr.head.sha)
-    )
+    ...(await named('workflow_run')),
+    ...(await named('workflow_dispatch'))
   ]
     .filter((r) => r.path === path)
     .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id)
@@ -215,12 +219,12 @@ async function main(env) {
     producer: runs[c.workflow][0]?.name ?? c.workflow,
     ...resolveCheck(c, runs[c.workflow])
   }))
-  // A fork PR's pull_request runs use its own workflow files, so it could replace the checks it is judged on. A member
-  // who has reviewed them accepts that one commit with `/merge-guard accept <sha>`.
+  // A fork PR's pull_request runs use its own workflow files, so it could replace the checks it is judged on. Someone
+  // with write access who has reviewed them accepts that one commit with `/merge-guard accept <sha>`.
   const forkEditsCi = pr.head.repo?.full_name !== env.GITHUB_REPOSITORY && files.some((f) => f.startsWith('.github/'))
   const result =
     forkEditsCi && !(await acceptedBy(gh, env, pr))
-      ? { state: 'failure', description: `fork PR changes .github/; after review, a member comments /merge-guard accept ${sha.slice(0, 7)}` }
+      ? { state: 'failure', description: `fork PR changes .github/; after review, a maintainer comments /merge-guard accept ${sha.slice(0, 7)}` }
       : verdict(resolved)
   appendFileSync(env.GITHUB_STEP_SUMMARY, summary(pr, rules, resolved, result))
 
