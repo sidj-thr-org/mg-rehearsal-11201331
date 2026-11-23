@@ -39,3 +39,4 @@ jobs:
           json=$(printf '%s\n' "${sel[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')
           echo "projects=$json" >> "$GITHUB_OUTPUT"
           [ "$json" = "[]" ] && echo "any=false" >> "$GITHUB_OUTPUT" || echo "any=true" >> "$GITHUB_OUTPUT"
+# fork note 1795431217
